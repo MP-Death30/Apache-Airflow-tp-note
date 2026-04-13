@@ -212,12 +212,12 @@ with DAG(
     tags=["sante-publique", "epidemio", "docker-compose"],
 ) as dag:
 
-    # init_base_donnees = PostgresOperator(
-    #     task_id="init_base_donnees",
-    #     postgres_conn_id="postgres_ars",
-    #     sql="sql/init_ars_epidemio.sql", # Fichier SQL séparé dans le dossier dags/sql/
-    #     autocommit=True,
-    # )
+    init_base_donnees = PostgresOperator(
+        task_id="init_base_donnees",
+        postgres_conn_id="postgres_ars",
+        sql="sql/init_ars_epidemio.sql", # Fichier SQL séparé dans le dossier dags/sql/
+        autocommit=True,
+    )
 
     collecter_sursaud = PythonOperator(
         task_id="collecter_donnees_sursaud",
@@ -252,4 +252,4 @@ with DAG(
         provide_context=True,
     )
 
-    collecter_sursaud >> archiver >> verifier >> calculer >> inserer_postgres
+    init_base_donnees >> collecter_sursaud >> archiver >> verifier >> calculer >> inserer_postgres

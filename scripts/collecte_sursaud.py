@@ -42,21 +42,28 @@ def telecharger_csv_ias(url: str) -> List[Dict]:
     return rows
 
 def filtrer_semaine(rows: List[Dict], semaine: str) -> List[Dict]:
-    annee_cible = int(semaine.split("-")[0])
-    num_sem_cible = int(semaine.split("-S")[1])
+    # semaine est au format "2024-S01"
+    parts = semaine.split("-S")
+    annee_cible = int(parts[0])
+    num_sem_cible = int(parts[1])
+    
     filtered = []
     for row in rows:
         periode = row.get("PERIODE")
         if not periode:
             continue
         try:
+            # Format attendu dans le CSV : DD-MM-YYYY
             d = datetime.strptime(periode, "%d-%m-%Y").date()
-            iso_year, iso_week, _ = d.isocalendar()
+            iso_year, iso_week, iso_weekday = d.isocalendar()
+            
+            # On vérifie la correspondance stricte avec la semaine ISO
             if iso_year == annee_cible and iso_week == num_sem_cible:
                 filtered.append(row)
-        except ValueError:
+        except (ValueError, TypeError):
             continue
-    logger.info(f"{len(filtered)} jours pour la semaine {semaine}")
+            
+    logger.info(f"Semaine {semaine} : {len(filtered)} lignes trouvées")
     return filtered
 
 def agreger_semaine(rows: List[Dict], syndrome: str, semaine: str) -> dict:
@@ -71,7 +78,7 @@ def agreger_semaine(rows: List[Dict], syndrome: str, semaine: str) -> dict:
         vals_occ = []
         for col in COLS_OCCITANIE:
             v = row.get(col)
-            if v is not None:
+            if v is not None and v != "NA": # Ajout de la sécurité sur NA
                 try:
                     vals_occ.append(float(v))
                 except ValueError:
