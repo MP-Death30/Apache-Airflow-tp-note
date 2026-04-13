@@ -60,12 +60,14 @@ Partitionnement local (Bind Mount) : Les données brutes sont archivées selon u
 Schéma PostgreSQL : Architecture relationnelle (base `ars_epidemio`). Les référentiels géographiques (`departements`) et médicaux (`syndromes`) sont croisés par les tables transactionnelles (`donnees_hebdomadaires`, `indicateurs_epidemiques`, `rapports_ars`). Traçabilité assurée par les champs `created_at` et `updated_at`.
 
 ## Décisions techniques
-Idempotence SQL : Remplacement de `CREATE OR REPLACE TRIGGER` par `DROP TRIGGER IF EXISTS` suivi d'un `CREATE TRIGGER` pour assurer la compatibilité PostgreSQL 13 lors des réexécutions.
-Gestion des volumes : Remplacement du volume Docker persistant initial par un bind mount (`./data:/data/ars`) pour octroyer les droits d'écriture à l'utilisateur non privilégié Airflow (UID 50000) et résoudre l'erreur `[Errno 13] Permission denied`.
-Correction logique métier : Réécriture de l'étape d'évaluation épidémique (Etape 8) avec une agrégation sur `syndrome` au lieu de `code_dept`, ce dernier étant absent de la table cible selon le schéma fourni.
-Rattrapage temporel : Modification du paramètre `start_date` à `2024-04-01` pour correspondre à la réalité des datasets distants et éviter l'échec du backfilling.
 
-## Difficultés rencontrées et solutions
-Échec d'écriture dans le volume partagé causé par l'attribution des droits `root` par le daemon Docker. Résolu par un basculement sur un bind mount local pré-instancié.
-Erreurs de syntaxe SQL fatales bloquant l'initialisation de la base, générées par des retours à la ligne erratiques dans le copier-coller des commentaires SQL du sujet. Résolu par le nettoyage strict du fichier d'initialisation.
-Incohérence du cahier des charges entre la structure imposée pour la table `indicateurs_epidemiques` et la requête d'évaluation d'urgence (colonne manquante). Résolu par adaptation de la requête d'évaluation.
+- Idempotence des déclencheurs SQL : Remplacement de la syntaxe CREATE OR REPLACE TRIGGER (non reconnue par PostgreSQL 13) par un mécanisme destructif préalable DROP TRIGGER IF EXISTS suivi d'une création stricte.
+- Résolution des droits d'écriture : Remplacement du volume Docker persistant classique par un bind mount pour garantir que l'utilisateur non-privilégié airflow (UID 50000) puisse générer et écrire les fichiers JSON sans lever d'erreur d'[Errno 13].
+- Alignement de la granularité des données : Modification de la requête d'évaluation d'urgence (Étape 8). Le regroupement a été réorienté sur la colonne syndrome afin de pallier l'absence de la colonne code_dept dans le schéma de la table indicateurs_epidemiques imposé.
+- Synchronisation temporelle : Modification du start_date du DAG à 2024-04-01 pour correspondre à la plage de disponibilité effective des fichiers CSV sources, évitant les échecs de collecte lors du rattrapage historique (catchup).
+
+## Difficultés
+
+- Conflit de propriété sur le dossier racine /data/ars initialisé implicitement par le daemon Docker en root.
+- Rupture du flux d'exécution sur des erreurs de syntaxe SQL héritées des coupures de lignes dans les commentaires du code fourni.
+- Désalignement entre les spécifications techniques du schéma (Section 5) et les requêtes fonctionnelles (Section 8) conduisant à des erreurs de ciblage de colonnes
