@@ -1,0 +1,22 @@
+[
+  {
+    "code_dept": "76",
+    "semaine": "2024-S21",
+    "syndrome": "GRIPPE",
+    "taux_incidence": 0.006,
+    "z_score": -1.3594901431534685,
+    "r0_estime": 1.7242063492063493,
+    "nb_annees_reference": 5,
+    "statut": "NORMAL"
+  },
+  {
+    "code_dept": "76",
+    "semaine": "2024-S21",
+    "syndrome": "GEA",
+    "taux_incidence": 85.993,
+    "z_score": -0.021361250825451386,
+    "r0_estime": 0.9895330329976375,
+    "nb_annees_reference": 5,
+    "statut": "ALERTE"
+  }
+]

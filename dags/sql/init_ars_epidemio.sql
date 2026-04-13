@@ -59,29 +59,18 @@ ON donnees_hebdomadaires (syndrome, annee, numero_semaine);
 CREATE TABLE IF NOT EXISTS indicateurs_epidemiques (
 id SERIAL PRIMARY KEY,
 semaine VARCHAR(8) NOT NULL,
-syndrome VARCHAR(20) NOT NULL REFERENCES
-syndromes(code),
-valeur_ias FLOAT, -- valeur IAS hebdomadaire
-Occitanie
-z_score FLOAT, -- par rapport aux N-1..N-5
-mêmes semaines
-r0_estime FLOAT, -- reproduction number estimé
-(modèle SIR simplifié)
-nb_saisons_reference INTEGER, -- nombre de saisons
-historiques utilisées pour le z-score
-statut VARCHAR(10) CHECK (statut IN ('NORMAL',
-'ALERTE', 'URGENCE')),
-statut_ias VARCHAR(10) CHECK (statut_ias IN ('NORMAL',
-'ALERTE', 'URGENCE')),
-statut_zscore VARCHAR(10) CHECK (statut_zscore IN
-('NORMAL', 'ALERTE', 'URGENCE')),
+syndrome VARCHAR(20) NOT NULL REFERENCES syndromes(code),
+valeur_ias FLOAT,
+z_score FLOAT,
+r0_estime FLOAT,
+nb_saisons_reference INTEGER,
+statut VARCHAR(10) CHECK (statut IN ('NORMAL', 'ALERTE', 'URGENCE')),
+statut_ias VARCHAR(10) CHECK (statut_ias IN ('NORMAL', 'ALERTE', 'URGENCE')),
+statut_zscore VARCHAR(10) CHECK (statut_zscore IN ('NORMAL', 'ALERTE', 'URGENCE')),
 commentaire TEXT,
-calcule_le TIMESTAMP WITH TIME ZONE DEFAULT
-CURRENT_TIMESTAMP,
-created_at TIMESTAMP WITH TIME ZONE DEFAULT
-CURRENT_TIMESTAMP,
-updated_at TIMESTAMP WITH TIME ZONE DEFAULT
-CURRENT_TIMESTAMP,
+calcule_le TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 CONSTRAINT uq_indicateurs UNIQUE (semaine, syndrome)
 );
 

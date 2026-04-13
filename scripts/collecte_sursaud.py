@@ -43,9 +43,8 @@ def telecharger_csv_ias(url: str) -> List[Dict]:
 
 def filtrer_semaine(rows: List[Dict], semaine: str) -> List[Dict]:
     # semaine est au format "2024-S01"
-    parts = semaine.split("-S")
-    annee_cible = int(parts[0])
-    num_sem_cible = int(parts[1])
+    annee_cible = int(semaine.split("-")[0])
+    num_sem_cible = int(semaine.split("-S")[1])
     
     filtered = []
     for row in rows:
@@ -55,7 +54,7 @@ def filtrer_semaine(rows: List[Dict], semaine: str) -> List[Dict]:
         try:
             # Format attendu dans le CSV : DD-MM-YYYY
             d = datetime.strptime(periode, "%d-%m-%Y").date()
-            iso_year, iso_week, iso_weekday = d.isocalendar()
+            iso_year, iso_week, _ = d.isocalendar()
             
             # On vérifie la correspondance stricte avec la semaine ISO
             if iso_year == annee_cible and iso_week == num_sem_cible:
@@ -78,7 +77,7 @@ def agreger_semaine(rows: List[Dict], syndrome: str, semaine: str) -> dict:
         vals_occ = []
         for col in COLS_OCCITANIE:
             v = row.get(col)
-            if v is not None and v != "NA": # Ajout de la sécurité sur NA
+            if v is not None:
                 try:
                     vals_occ.append(float(v))
                 except ValueError:

@@ -115,16 +115,10 @@ def calculer_indicateurs_epidemiques(**context):
     indicateurs = []
     durees_infectieuses = {"GRIPPE": 5, "GEA": 3, "SG": 5, "BRONCHIO": 7, "COVID19": 7}
 
-    for syndrome, data in donnees_brutes.items():
-    if data.get("valeur_ias") is not None:
-        data_sql = data.copy()
-        data_sql["semaine"] = semaine
-        data_sql["syndrome"] = syndrome
-        # mapping des variables pour correspondre aux noms dans la requête SQL
-        data_sql["seuil_min"] = data.get("seuil_min")
-        data_sql["seuil_max"] = data.get("seuil_max")
-        data_sql["nb_jours"] = data.get("nb_jours")
-        cur.execute(sql_donnees, data_sql)
+    for syndrome, data in donnees_json.items():
+        valeur_ias = data.get("valeur_ias")
+        if valeur_ias is None:
+            continue
 
         sql = """
             SELECT valeur_ias FROM donnees_hebdomadaires
@@ -204,7 +198,13 @@ def inserer_donnees_postgres(**context) -> None:
         with conn.cursor() as cur:
             for syndrome, data in donnees_brutes.items():
                 if data.get("valeur_ias") is not None:
-                    cur.execute(sql_donnees, data)
+                    data_sql = data.copy()
+                    data_sql["semaine"] = semaine
+                    data_sql["syndrome"] = syndrome
+                    data_sql["seuil_min"] = data.get("seuil_min")
+                    data_sql["seuil_max"] = data.get("seuil_max")
+                    data_sql["nb_jours"] = data.get("nb_jours")
+                    cur.execute(sql_donnees, data_sql)
                     
             for ind in indicateurs:
                 cur.execute(sql_indicateurs, ind)
@@ -219,36 +219,32 @@ def evaluer_situation_epidemique(**context) -> str:
     with hook.get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT statut, COUNT(DISTINCT code_dept), ARRAY_AGG(DISTINCT code_dept)
+                SELECT statut, COUNT(DISTINCT syndrome), ARRAY_AGG(DISTINCT syndrome)
                 FROM indicateurs_epidemiques
                 WHERE semaine = %s GROUP BY statut
             """, (semaine,))
-            resultats = {row[0]: {"nb": row[1], "depts": row[2]} for row in cur.fetchall()}
+            resultats = {row[0]: {"nb": row[1], "cibles": row[2]} for row in cur.fetchall()}
 
     nb_urgence = resultats.get("URGENCE", {}).get("nb", 0)
     nb_alerte = resultats.get("ALERTE", {}).get("nb", 0)
 
-    context["task_instance"].xcom_push(key="depts_urgence", value=resultats.get("URGENCE", {}).get("depts", []))
-    context["task_instance"].xcom_push(key="depts_alerte", value=resultats.get("ALERTE", {}).get("depts", []))
+    context["task_instance"].xcom_push(key="urgences", value=resultats.get("URGENCE", {}).get("cibles", []))
+    context["task_instance"].xcom_push(key="alertes", value=resultats.get("ALERTE", {}).get("cibles", []))
 
     if nb_urgence > 0: return "declencher_alerte_ars"
     elif nb_alerte > 0: return "envoyer_bulletin_surveillance"
     else: return "confirmer_situation_normale"
 
 def declencher_alerte_ars(**context):
-    depts = context["task_instance"].xcom_pull(task_ids="evaluer_situation_epidemique", key="depts_urgence")
-    logger.critical(f"ALERTE ARS DÉCLENCHÉE : {depts}")
+    cibles = context["task_instance"].xcom_pull(task_ids="evaluer_situation_epidemique", key="urgences")
+    logger.critical(f"ALERTE ARS DÉCLENCHÉE - Syndromes : {cibles}")
 
 def envoyer_bulletin_surveillance(**context):
-    depts = context["task_instance"].xcom_pull(task_ids="evaluer_situation_epidemique", key="depts_alerte")
-    logger.warning(f"Bulletin envoyé - ALERTE: {depts}")
+    cibles = context["task_instance"].xcom_pull(task_ids="evaluer_situation_epidemique", key="alertes")
+    logger.warning(f"Bulletin envoyé - ALERTE - Syndromes : {cibles}")
 
 def confirmer_situation_normale(**context):
     logger.info("Situation normale, aucune action.")
-
-
-
-logger = logging.getLogger(__name__)
 
 def generer_rapport_hebdomadaire(**context) -> None:
     semaine: str = context["templates_dict"]["semaine"]
@@ -257,25 +253,21 @@ def generer_rapport_hebdomadaire(**context) -> None:
     with hook.get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT ie.code_dept, d.nom, ie.syndrome, ie.valeur_ias, ie.z_score, ie.r0_estime, ie.statut
-                FROM indicateurs_epidemiques ie
-                JOIN departements d ON ie.code_dept = d.code_dept
-                WHERE ie.semaine = %s
-                ORDER BY ie.statut DESC, ie.valeur_ias DESC
+                SELECT syndrome, valeur_ias, z_score, r0_estime, statut
+                FROM indicateurs_epidemiques
+                WHERE semaine = %s
+                ORDER BY statut DESC, valeur_ias DESC
             """, (semaine,))
             indicateurs = cur.fetchall()
 
-    statuts = [row[6] for row in indicateurs]
+    statuts = [row[4] for row in indicateurs]
 
-    if "URGENCE" in statuts:
-        situation_globale = "URGENCE"
-    elif "ALERTE" in statuts:
-        situation_globale = "ALERTE"
-    else:
-        situation_globale = "NORMAL"
+    if "URGENCE" in statuts: situation_globale = "URGENCE"
+    elif "ALERTE" in statuts: situation_globale = "ALERTE"
+    else: situation_globale = "NORMAL"
 
-    depts_urgence = {row[0]: row[1] for row in indicateurs if row[6] == "URGENCE"}
-    depts_alerte = {row[0]: row[1] for row in indicateurs if row[6] == "ALERTE"}
+    cibles_urgence = [row[0] for row in indicateurs if row[4] == "URGENCE"]
+    cibles_alerte = [row[0] for row in indicateurs if row[4] == "ALERTE"]
 
     recommandations_par_niveau = {
         "URGENCE": [
@@ -301,18 +293,15 @@ def generer_rapport_hebdomadaire(**context) -> None:
         "code_region": "76",
         "date_generation": datetime.utcnow().isoformat(),
         "situation_globale": situation_globale,
-        "nb_departements_surveilles": 13,
-        "departements_en_urgence": [{"code": c, "nom": n} for c, n in depts_urgence.items()],
-        "departements_en_alerte": [{"code": c, "nom": n} for c, n in depts_alerte.items()],
+        "syndromes_en_urgence": cibles_urgence,
+        "syndromes_en_alerte": cibles_alerte,
         "indicateurs": [
             {
-                "code_dept": row[0],
-                "nom_dept": row[1],
-                "syndrome": row[2],
-                "taux_incidence_100k": row[3],
-                "z_score": row[4],
-                "ro_estime": row[5],
-                "statut": row[6],
+                "syndrome": row[0],
+                "taux_incidence_100k": row[1],
+                "z_score": row[2],
+                "ro_estime": row[3],
+                "statut": row[4],
             }
             for row in indicateurs
         ],
@@ -346,8 +335,8 @@ def generer_rapport_hebdomadaire(**context) -> None:
             """, (
                 semaine,
                 situation_globale,
-                len(depts_alerte),
-                len(depts_urgence),
+                len(cibles_alerte),
+                len(cibles_urgence),
                 json.dumps(rapport, ensure_ascii=False),
                 local_path
             ))
@@ -362,7 +351,7 @@ with DAG(
     default_args=default_args,
     description="Pipeline surveillance épidémiologique ARS Occitanie",
     schedule_interval="0 06 * * 1",
-    start_date=datetime(2024, 1, 1), # Tous les lundis à 6h UTC
+    start_date=datetime(2024, 4, 1), # Tous les lundis à 6h UTC
     catchup=True,
     max_active_runs=1,
     tags=["sante-publique", "epidemio", "docker-compose"],

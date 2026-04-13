@@ -1,0 +1,37 @@
+{
+  "semaine": "2024-S28",
+  "collecte_le": "2026-04-13T14:50:43.769639",
+  "source": "IAS_OpenHealth_data.gouv.fr",
+  "syndromes": {
+    "GRIPPE": {
+      "semaine": "2024-S28",
+      "syndrome": "GRIPPE",
+      "valeur_ias": 0.06,
+      "seuil_min": 0.204,
+      "seuil_max": 15.207,
+      "nb_jours": 7,
+      "historique": {
+        "Sais_2023_2024": 0.204,
+        "Sais_2022_2023": 15.207,
+        "Sais_2021_2022": 4.054,
+        "Sais_2020_2021": 3.467,
+        "Sais_2019_2020": 1.383
+      }
+    },
+    "GEA": {
+      "semaine": "2024-S28",
+      "syndrome": "GEA",
+      "valeur_ias": 109.622,
+      "seuil_min": 92.157,
+      "seuil_max": 117.071,
+      "nb_jours": 7,
+      "historique": {
+        "Sais_2023_2024": 114.8,
+        "Sais_2022_2023": 92.157,
+        "Sais_2021_2022": 115.557,
+        "Sais_2020_2021": 111.614,
+        "Sais_2019_2020": 116.271
+      }
+    }
+  }
+}
