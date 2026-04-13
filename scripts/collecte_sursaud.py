@@ -17,7 +17,7 @@ DATASETS_IAS = {
     "GEA": "https://www.data.gouv.fr/api/1/datasets/r/6c415be9-4ebf-4af5-b0dc-9867bb1ec0e3",
 }
 
-COL_OCCITANIE = "Loc_Reg76"
+COLS_OCCITANIE = ["Loc_Reg91", "Loc_Reg73"]
 
 def get_semaine_iso(reference_date: Optional[date] = None) -> str:
     if reference_date is None:
@@ -42,8 +42,8 @@ def telecharger_csv_ias(url: str) -> List[Dict]:
     return rows
 
 def filtrer_semaine(rows: List[Dict], semaine: str) -> List[Dict]:
-    annee_cible = int(semaine[:4])
-    num_sem_cible = int(semaine[6:]) 
+    annee_cible = int(semaine.split("-")[0])
+    num_sem_cible = int(semaine.split("-S")[1])
     filtered = []
     for row in rows:
         periode = row.get("PERIODE")
@@ -64,17 +64,25 @@ def agreger_semaine(rows: List[Dict], syndrome: str, semaine: str) -> dict:
         "Sais_2023_2024", "Sais_2022_2023", "Sais_2021_2022",
         "Sais_2020_2021", "Sais_2019_2020",
     ]
-
     valeurs_ias, min_saison_vals, max_saison_vals = [], [], []
     historique: Dict[str, List[float]] = {col: [] for col in saisons_cols}
     
     for row in rows:
-        val = row.get(COL_OCCITANIE)
+        vals_occ = []
+        for col in COLS_OCCITANIE:
+            v = row.get(col)
+            if v is not None:
+                try:
+                    vals_occ.append(float(v))
+                except ValueError:
+                    pass
+        val = sum(vals_occ) / len(vals_occ) if vals_occ else None
         if val is not None:
             try:
                 valeurs_ias.append(float(val))
             except ValueError:
                 pass
+                
         for col in saisons_cols:
             v = row.get(col)
             if v is not None:
@@ -119,12 +127,10 @@ def sauvegarder_donnees(donnees: dict, semaine: str, output_dir: str) -> str:
 if __name__ == "__main__":
     semaine = os.environ.get("SEMAINE_CIBLE", get_semaine_iso())
     output_dir = os.environ.get("OUTPUT_DIR", "/data/ars/raw")
-    
     resultats = {}
     for syndrome, url in DATASETS_IAS.items():
         rows_all = telecharger_csv_ias(url)
         rows_sem = filtrer_semaine(rows_all, semaine)
         resultats[syndrome] = agreger_semaine(rows_sem, syndrome, semaine)
-    
     chemin = sauvegarder_donnees(resultats, semaine, output_dir)
     print(f"COLLECTE_OK: {chemin}")

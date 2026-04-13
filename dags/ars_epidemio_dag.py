@@ -2,10 +2,11 @@ from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.utils.dates import days_ago
 from airflow.providers.postgres.operators.postgres import PostgresOperator
+from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.operators.python import PythonOperator
 from airflow.models import Variable
 import sys
-import os, shutil
+import os, shutil, json
 
 
 default_args = {
@@ -87,6 +88,117 @@ def verifier_archive(**context) -> bool:
     return True
 
 
+def calculer_indicateurs_epidemiques(**context):
+    semaine = (
+        f"{context['execution_date'].year}-"
+        f"S{context['execution_date'].isocalendar()[1]:02d}"
+    )
+    annee, num_sem = semaine.split("-")
+    chemin_archive = f"/data/ars/raw/{annee}/{num_sem}/sursaud_{semaine}.json"
+    
+    with open(chemin_archive, "r") as f:
+        donnees_json = json.load(f)["syndromes"]
+
+    sys.path.insert(0, "/opt/airflow/scripts")
+    from calcul_indicateurs import (
+        calculer_zscore, classifier_statut_ias,
+        classifier_statut_zscore, classifier_statut_final,
+        calculer_r0_simplifie
+    )
+
+    hook = PostgresHook(postgres_conn_id="postgres_ars")
+    indicateurs = []
+    durees_infectieuses = {"GRIPPE": 5, "GEA": 3, "SG": 5, "BRONCHIO": 7, "COVID19": 7}
+
+    for syndrome, data in donnees_json.items():
+        valeur_ias = data.get("valeur_ias")
+        if valeur_ias is None:
+            continue
+
+        sql = """
+            SELECT valeur_ias FROM donnees_hebdomadaires
+            WHERE syndrome = %s AND semaine < %s
+            ORDER BY semaine DESC LIMIT 3;
+        """
+        records = hook.get_records(sql, parameters=(syndrome, semaine))
+        valeurs_historiques = [r[0] for r in records]
+        valeurs_historiques.reverse()
+        serie_hebdomadaire = valeurs_historiques + [valeur_ias]
+
+        historique_saisons = list(data.get("historique", {}).values())
+        z_score = calculer_zscore(valeur_ias, historique_saisons)
+        r0 = calculer_r0_simplifie(serie_hebdomadaire, durees_infectieuses.get(syndrome, 5))
+        
+        statut_ias = classifier_statut_ias(valeur_ias, data.get("seuil_min"), data.get("seuil_max"))
+        statut_zscore = classifier_statut_zscore(z_score)
+        statut_final = classifier_statut_final(statut_ias, statut_zscore)
+
+        indicateurs.append({
+            "code_dept": "76",
+            "semaine": semaine,
+            "syndrome": syndrome,
+            "taux_incidence": valeur_ias,
+            "z_score": z_score,
+            "r0_estime": r0,
+            "nb_annees_reference": len([v for v in historique_saisons if v is not None]),
+            "statut": statut_final
+        })
+
+    os.makedirs("/data/ars/indicateurs", exist_ok=True)
+    with open(f"/data/ars/indicateurs/indicateurs_{semaine}.json", "w", encoding="utf-8") as f:
+        json.dump(indicateurs, f, ensure_ascii=False, indent=2)
+
+
+def inserer_donnees_postgres(**context) -> None:
+    from airflow.providers.postgres.hooks.postgres import PostgresHook
+    import json
+
+    semaine: str = context["templates_dict"]["semaine"]
+    annee, num_sem = semaine.split("-")
+    
+    with open(f"/data/ars/raw/{annee}/{num_sem}/sursaud_{semaine}.json") as f:
+        donnees_brutes = json.load(f)["syndromes"]
+        
+    with open(f"/data/ars/indicateurs/indicateurs_{semaine}.json") as f:
+        indicateurs = json.load(f)
+
+    hook = PostgresHook(postgres_conn_id="postgres_ars")
+
+    sql_donnees = """
+        INSERT INTO donnees_hebdomadaires
+        (semaine, syndrome, valeur_ias, seuil_min_saison, seuil_max_saison, nb_jours_donnees)
+        VALUES (%(semaine)s, %(syndrome)s, %(valeur_ias)s, %(seuil_min)s, %(seuil_max)s, %(nb_jours)s)
+        ON CONFLICT (semaine, syndrome)
+        DO UPDATE SET
+            valeur_ias = EXCLUDED.valeur_ias,
+            seuil_min_saison = EXCLUDED.seuil_min_saison,
+            seuil_max_saison = EXCLUDED.seuil_max_saison,
+            nb_jours_donnees = EXCLUDED.nb_jours_donnees;
+    """
+
+    sql_indicateurs = """
+        INSERT INTO indicateurs_epidemiques
+        (semaine, syndrome, valeur_ias, z_score, r0_estime, nb_saisons_reference, statut)
+        VALUES (%(semaine)s, %(syndrome)s, %(taux_incidence)s, %(z_score)s, %(r0_estime)s, %(nb_annees_reference)s, %(statut)s)
+        ON CONFLICT (semaine, syndrome)
+        DO UPDATE SET
+            valeur_ias = EXCLUDED.valeur_ias,
+            z_score = EXCLUDED.z_score,
+            r0_estime = EXCLUDED.r0_estime,
+            nb_saisons_reference = EXCLUDED.nb_saisons_reference,
+            statut = EXCLUDED.statut;
+    """
+
+    with hook.get_conn() as conn:
+        with conn.cursor() as cur:
+            for syndrome, data in donnees_brutes.items():
+                if data.get("valeur_ias") is not None:
+                    cur.execute(sql_donnees, data)
+                    
+            for ind in indicateurs:
+                cur.execute(sql_indicateurs, ind)
+        conn.commit()
+
 
 
 with DAG(
@@ -125,5 +237,19 @@ with DAG(
         provide_context=True,
     )
 
-    #init_base_donnees >> collecter_sursaud >> archiver >> verifier
-    collecter_sursaud >> archiver >> verifier
+    calculer = PythonOperator(
+        task_id="calculer_indicateurs_epidemiques",
+        python_callable=calculer_indicateurs_epidemiques,
+        provide_context=True,
+    )
+
+    inserer_postgres = PythonOperator(
+        task_id="inserer_donnees_postgres",
+        python_callable=inserer_donnees_postgres,
+        templates_dict={
+            "semaine": "{{ execution_date.year }}-S{{ '%02d' % execution_date.isocalendar()[1] }}"
+        },
+        provide_context=True,
+    )
+
+    collecter_sursaud >> archiver >> verifier >> calculer >> inserer_postgres
