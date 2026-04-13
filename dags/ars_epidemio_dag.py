@@ -5,6 +5,9 @@ from airflow.providers.postgres.operators.postgres import PostgresOperator
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.operators.python import PythonOperator
 from airflow.models import Variable
+from airflow.operators.python import BranchPythonOperator
+from airflow.utils.trigger_rule import TriggerRule
+import logging
 import sys
 import os, shutil, json
 
@@ -112,10 +115,16 @@ def calculer_indicateurs_epidemiques(**context):
     indicateurs = []
     durees_infectieuses = {"GRIPPE": 5, "GEA": 3, "SG": 5, "BRONCHIO": 7, "COVID19": 7}
 
-    for syndrome, data in donnees_json.items():
-        valeur_ias = data.get("valeur_ias")
-        if valeur_ias is None:
-            continue
+    for syndrome, data in donnees_brutes.items():
+    if data.get("valeur_ias") is not None:
+        data_sql = data.copy()
+        data_sql["semaine"] = semaine
+        data_sql["syndrome"] = syndrome
+        # mapping des variables pour correspondre aux noms dans la requête SQL
+        data_sql["seuil_min"] = data.get("seuil_min")
+        data_sql["seuil_max"] = data.get("seuil_max")
+        data_sql["nb_jours"] = data.get("nb_jours")
+        cur.execute(sql_donnees, data_sql)
 
         sql = """
             SELECT valeur_ias FROM donnees_hebdomadaires
@@ -202,6 +211,151 @@ def inserer_donnees_postgres(**context) -> None:
         conn.commit()
 
 
+logger = logging.getLogger(__name__)
+
+def evaluer_situation_epidemique(**context) -> str:
+    semaine: str = context["templates_dict"]["semaine"]
+    hook = PostgresHook(postgres_conn_id="postgres_ars")
+    with hook.get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT statut, COUNT(DISTINCT code_dept), ARRAY_AGG(DISTINCT code_dept)
+                FROM indicateurs_epidemiques
+                WHERE semaine = %s GROUP BY statut
+            """, (semaine,))
+            resultats = {row[0]: {"nb": row[1], "depts": row[2]} for row in cur.fetchall()}
+
+    nb_urgence = resultats.get("URGENCE", {}).get("nb", 0)
+    nb_alerte = resultats.get("ALERTE", {}).get("nb", 0)
+
+    context["task_instance"].xcom_push(key="depts_urgence", value=resultats.get("URGENCE", {}).get("depts", []))
+    context["task_instance"].xcom_push(key="depts_alerte", value=resultats.get("ALERTE", {}).get("depts", []))
+
+    if nb_urgence > 0: return "declencher_alerte_ars"
+    elif nb_alerte > 0: return "envoyer_bulletin_surveillance"
+    else: return "confirmer_situation_normale"
+
+def declencher_alerte_ars(**context):
+    depts = context["task_instance"].xcom_pull(task_ids="evaluer_situation_epidemique", key="depts_urgence")
+    logger.critical(f"ALERTE ARS DÉCLENCHÉE : {depts}")
+
+def envoyer_bulletin_surveillance(**context):
+    depts = context["task_instance"].xcom_pull(task_ids="evaluer_situation_epidemique", key="depts_alerte")
+    logger.warning(f"Bulletin envoyé - ALERTE: {depts}")
+
+def confirmer_situation_normale(**context):
+    logger.info("Situation normale, aucune action.")
+
+
+
+logger = logging.getLogger(__name__)
+
+def generer_rapport_hebdomadaire(**context) -> None:
+    semaine: str = context["templates_dict"]["semaine"]
+    hook = PostgresHook(postgres_conn_id="postgres_ars")
+
+    with hook.get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT ie.code_dept, d.nom, ie.syndrome, ie.valeur_ias, ie.z_score, ie.r0_estime, ie.statut
+                FROM indicateurs_epidemiques ie
+                JOIN departements d ON ie.code_dept = d.code_dept
+                WHERE ie.semaine = %s
+                ORDER BY ie.statut DESC, ie.valeur_ias DESC
+            """, (semaine,))
+            indicateurs = cur.fetchall()
+
+    statuts = [row[6] for row in indicateurs]
+
+    if "URGENCE" in statuts:
+        situation_globale = "URGENCE"
+    elif "ALERTE" in statuts:
+        situation_globale = "ALERTE"
+    else:
+        situation_globale = "NORMAL"
+
+    depts_urgence = {row[0]: row[1] for row in indicateurs if row[6] == "URGENCE"}
+    depts_alerte = {row[0]: row[1] for row in indicateurs if row[6] == "ALERTE"}
+
+    recommandations_par_niveau = {
+        "URGENCE": [
+            "Activation du plan de réponse épidémique régional",
+            "Renforcement des équipes de surveillance dans les services d'urgences",
+            "Communication renforcée auprès des professionnels de santé libéraux",
+            "Notification immédiate à Santé Publique France et au Ministère de la Santé",
+        ],
+        "ALERTE": [
+            "Surveillance renforcée des indicateurs pour les 48h suivantes",
+            "Envoi d'un bulletin de surveillance aux partenaires de santé",
+            "Vérification des capacités d'accueil des services d'urgences",
+        ],
+        "NORMAL": [
+            "Maintien de la surveillance standard",
+            "Prochain point épidémiologique dans 7 jours",
+        ],
+    }
+
+    rapport = {
+        "semaine": semaine,
+        "region": "Occitanie",
+        "code_region": "76",
+        "date_generation": datetime.utcnow().isoformat(),
+        "situation_globale": situation_globale,
+        "nb_departements_surveilles": 13,
+        "departements_en_urgence": [{"code": c, "nom": n} for c, n in depts_urgence.items()],
+        "departements_en_alerte": [{"code": c, "nom": n} for c, n in depts_alerte.items()],
+        "indicateurs": [
+            {
+                "code_dept": row[0],
+                "nom_dept": row[1],
+                "syndrome": row[2],
+                "taux_incidence_100k": row[3],
+                "z_score": row[4],
+                "ro_estime": row[5],
+                "statut": row[6],
+            }
+            for row in indicateurs
+        ],
+        "recommandations": recommandations_par_niveau[situation_globale],
+        "genere_par": "ars_epidemio_dag v1.0",
+        "pipeline_version": "2.8",
+    }
+
+    annee = semaine.split("-")[0]
+    num_sem = semaine.split("-")[1]
+    local_path = f"/data/ars/rapports/{annee}/{num_sem}/rapport_{semaine}.json"
+    
+    os.makedirs(os.path.dirname(local_path), exist_ok=True)
+    with open(local_path, "w", encoding="utf-8") as f:
+        json.dump(rapport, f, ensure_ascii=False, indent=2)
+
+    hook2 = PostgresHook(postgres_conn_id="postgres_ars")
+    with hook2.get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO rapports_ars
+                (semaine, situation_globale, nb_depts_alerte, nb_depts_urgence, rapport_json, chemin_local)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (semaine) DO UPDATE SET
+                situation_globale = EXCLUDED.situation_globale,
+                nb_depts_alerte = EXCLUDED.nb_depts_alerte,
+                nb_depts_urgence = EXCLUDED.nb_depts_urgence,
+                rapport_json = EXCLUDED.rapport_json,
+                chemin_local = EXCLUDED.chemin_local,
+                updated_at = CURRENT_TIMESTAMP
+            """, (
+                semaine,
+                situation_globale,
+                len(depts_alerte),
+                len(depts_urgence),
+                json.dumps(rapport, ensure_ascii=False),
+                local_path
+            ))
+        conn.commit()
+
+    logger.info(f"Rapport {semaine} généré. Statut: {situation_globale}")
+
+
 
 with DAG(
     dag_id="ars_epidemio_dag",
@@ -254,4 +408,27 @@ with DAG(
         provide_context=True,
     )
 
+    evaluer = BranchPythonOperator(
+        task_id="evaluer_situation_epidemique",
+        python_callable=evaluer_situation_epidemique,
+        templates_dict={"semaine": "{{ execution_date.year }}-S{{ '%02d' % execution_date.isocalendar()[1] }}"},
+        provide_context=True,
+    )
+
+    alerte_ars = PythonOperator(task_id="declencher_alerte_ars", python_callable=declencher_alerte_ars, provide_context=True)
+    bulletin = PythonOperator(task_id="envoyer_bulletin_surveillance", python_callable=envoyer_bulletin_surveillance, provide_context=True)
+    normale = PythonOperator(task_id="confirmer_situation_normale", python_callable=confirmer_situation_normale, provide_context=True)
+
+    generer_rapport = PythonOperator(
+        task_id="generer_rapport_hebdomadaire",
+        python_callable=generer_rapport_hebdomadaire,
+        templates_dict={
+            "semaine": "{{ execution_date.year }}-S{{ '%02d' % execution_date.isocalendar()[1] }}"
+        },
+        trigger_rule=TriggerRule.NONE_FAILED_MIN_ONE_SUCCESS,
+        provide_context=True,
+    )
+
     init_base_donnees >> collecter_sursaud >> archiver >> verifier >> calculer >> inserer_postgres
+    inserer_postgres >> evaluer
+    evaluer >> [alerte_ars, bulletin, normale] >> generer_rapport
