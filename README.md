@@ -6,9 +6,9 @@
 - Date : 13-04-2026
 
 ## Prérequis
-Docker Desktop >=4.0
-Docker Compose >=2.0
-Python >=3.11 (pour les tests locaux)
+- Docker Desktop >=4.0
+- Docker Compose >=2.0
+- Python >=3.11 (pour les tests locaux)
 
 ## Instructions de déploiement
 
