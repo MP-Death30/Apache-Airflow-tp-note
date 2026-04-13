@@ -1,82 +1,115 @@
 CREATE TABLE IF NOT EXISTS syndromes (
-    id SERIAL PRIMARY KEY,
-    code VARCHAR(20) UNIQUE NOT NULL,
-    libelle VARCHAR(100) NOT NULL,
-    description TEXT,
-    duree_infectieuse_jours INTEGER DEFAULT 5,
-    actif BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+id SERIAL PRIMARY KEY,
+code VARCHAR(20) UNIQUE NOT NULL,
+libelle VARCHAR(100) NOT NULL,
+description TEXT,
+duree_infectieuse_jours INTEGER DEFAULT 5,
+actif BOOLEAN DEFAULT TRUE,
+created_at TIMESTAMP WITH TIME ZONE DEFAULT
+CURRENT_TIMESTAMP,
+updated_at TIMESTAMP WITH TIME ZONE DEFAULT
+CURRENT_TIMESTAMP
 );
+
 
 CREATE TABLE IF NOT EXISTS departements (
-    id SERIAL PRIMARY KEY,
-    code_dept VARCHAR(3) UNIQUE NOT NULL,
-    nom VARCHAR(100) NOT NULL,
-    code_region VARCHAR(3) NOT NULL,
-    nom_region VARCHAR(100) NOT NULL,
-    population INTEGER NOT NULL,
-    superficie_km2 FLOAT,
-    chef_lieu VARCHAR(100),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+id SERIAL PRIMARY KEY,
+code_dept VARCHAR(3) UNIQUE NOT NULL,
+nom VARCHAR(100) NOT NULL,
+code_region VARCHAR(3) NOT NULL,
+nom_region VARCHAR(100) NOT NULL,
+population INTEGER NOT NULL,
+superficie_km2 FLOAT,
+chef_lieu VARCHAR(100),
+created_at TIMESTAMP WITH TIME ZONE DEFAULT
+CURRENT_TIMESTAMP,
+updated_at TIMESTAMP WITH TIME ZONE DEFAULT
+CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_departements_region ON departements (code_region);
+CREATE INDEX IF NOT EXISTS idx_departements_region
+ON departements (code_region);
 
 CREATE TABLE IF NOT EXISTS donnees_hebdomadaires (
-    id SERIAL PRIMARY KEY,
-    semaine VARCHAR(8) NOT NULL,
-    syndrome VARCHAR(20) NOT NULL REFERENCES syndromes (code),
-    valeur_ias FLOAT NOT NULL,
-    seuil_min_saison FLOAT,
-    seuil_max_saison FLOAT,
-    nb_jours_donnees INTEGER DEFAULT 0,
-    annee INTEGER GENERATED ALWAYS AS (CAST(LEFT(semaine, 4) AS INTEGER)) STORED,
-    numero_semaine INTEGER GENERATED ALWAYS AS (CAST(RIGHT(semaine, 2) AS INTEGER)) STORED,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT uq_donnees_hbd UNIQUE (semaine, syndrome)
+id SERIAL PRIMARY KEY,
+semaine VARCHAR(8) NOT NULL, -- format YYYY-SXX
+syndrome VARCHAR(20) NOT NULL REFERENCES
+syndromes(code),
+valeur_ias FLOAT NOT NULL, -- moyenne IAS Occitanie (Loc_Reg91 + Loc_Reg73) sur la semaine
+seuil_min_saison FLOAT, -- MIN_Saison du dataset (seuil épidémique bas)
+seuil_max_saison FLOAT, -- MAX_Saison du dataset (seuil pic épidémique)
+nb_jours_donnees INTEGER DEFAULT 0, -- nombre de jours disponibles pour l'agrégation
+annee INTEGER GENERATED ALWAYS AS
+(CAST(LEFT(semaine, 4) AS INTEGER)) STORED,
+numero_semaine INTEGER GENERATED ALWAYS AS
+(CAST(RIGHT(semaine, 2) AS INTEGER)) STORED,
+created_at TIMESTAMP WITH TIME ZONE DEFAULT
+CURRENT_TIMESTAMP,
+updated_at TIMESTAMP WITH TIME ZONE DEFAULT
+CURRENT_TIMESTAMP,
+CONSTRAINT uq_donnees_hbd UNIQUE (semaine, syndrome)
 );
 
-CREATE INDEX IF NOT EXISTS idx_donnees_hbd_semaine ON donnees_hebdomadaires (semaine);
-CREATE INDEX IF NOT EXISTS idx_donnees_hbd_syndrome_annee ON donnees_hebdomadaires (syndrome, annee, numero_semaine);
+
+CREATE INDEX IF NOT EXISTS idx_donnees_hbd_semaine
+ON donnees_hebdomadaires (semaine);
+CREATE INDEX IF NOT EXISTS idx_donnees_hbd_syndrome_annee
+ON donnees_hebdomadaires (syndrome, annee, numero_semaine);
 
 CREATE TABLE IF NOT EXISTS indicateurs_epidemiques (
-    id SERIAL PRIMARY KEY,
-    semaine VARCHAR(8) NOT NULL,
-    syndrome VARCHAR(20) NOT NULL REFERENCES syndromes (code),
-    valeur_ias FLOAT,
-    z_score FLOAT,
-    r0_estime FLOAT,
-    nb_saisons_reference INTEGER,
-    statut VARCHAR(10) CHECK (statut IN ('NORMAL', 'ALERTE', 'URGENCE')),
-    statut_ias VARCHAR(10) CHECK (statut_ias IN ('NORMAL', 'ALERTE', 'URGENCE')),
-    statut_zscore VARCHAR(10) CHECK (statut_zscore IN ('NORMAL', 'ALERTE', 'URGENCE')),
-    commentaire TEXT,
-    calcule_le TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT uq_indicateurs UNIQUE (semaine, syndrome)
+id SERIAL PRIMARY KEY,
+semaine VARCHAR(8) NOT NULL,
+syndrome VARCHAR(20) NOT NULL REFERENCES
+syndromes(code),
+valeur_ias FLOAT, -- valeur IAS hebdomadaire
+Occitanie
+z_score FLOAT, -- par rapport aux N-1..N-5
+mêmes semaines
+r0_estime FLOAT, -- reproduction number estimé
+(modèle SIR simplifié)
+nb_saisons_reference INTEGER, -- nombre de saisons
+historiques utilisées pour le z-score
+statut VARCHAR(10) CHECK (statut IN ('NORMAL',
+'ALERTE', 'URGENCE')),
+statut_ias VARCHAR(10) CHECK (statut_ias IN ('NORMAL',
+'ALERTE', 'URGENCE')),
+statut_zscore VARCHAR(10) CHECK (statut_zscore IN
+('NORMAL', 'ALERTE', 'URGENCE')),
+commentaire TEXT,
+calcule_le TIMESTAMP WITH TIME ZONE DEFAULT
+CURRENT_TIMESTAMP,
+created_at TIMESTAMP WITH TIME ZONE DEFAULT
+CURRENT_TIMESTAMP,
+updated_at TIMESTAMP WITH TIME ZONE DEFAULT
+CURRENT_TIMESTAMP,
+CONSTRAINT uq_indicateurs UNIQUE (semaine, syndrome)
 );
 
-CREATE INDEX IF NOT EXISTS idx_indicateurs_statut ON indicateurs_epidemiques (statut, semaine);
-CREATE INDEX IF NOT EXISTS idx_indicateurs_semaine ON indicateurs_epidemiques (semaine);
+CREATE INDEX IF NOT EXISTS idx_indicateurs_statut
+ON indicateurs_epidemiques (statut, semaine);
+CREATE INDEX IF NOT EXISTS idx_indicateurs_semaine
+ON indicateurs_epidemiques (semaine);
+
 
 CREATE TABLE IF NOT EXISTS rapports_ars (
-    id SERIAL PRIMARY KEY,
-    semaine VARCHAR(8) NOT NULL,
-    situation_globale VARCHAR(10) CHECK (situation_globale IN ('NORMAL', 'ALERTE', 'URGENCE')),
-    nb_depts_alerte INTEGER DEFAULT 0,
-    nb_depts_urgence INTEGER DEFAULT 0,
-    rapport_json JSONB,
-    chemin_local VARCHAR(500),
-    genere_le TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    genere_par VARCHAR(100) DEFAULT 'ars_epidemio_dag',
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT uq_rapport_semaine UNIQUE (semaine)
+id SERIAL PRIMARY KEY,
+semaine VARCHAR(8) NOT NULL,
+situation_globale VARCHAR(10) CHECK (situation_globale IN
+('NORMAL', 'ALERTE', 'URGENCE')),
+nb_depts_alerte INTEGER DEFAULT 0,
+nb_depts_urgence INTEGER DEFAULT 0,
+rapport_json JSONB, -- contenu complet du rapport
+chemin_local VARCHAR(500), -- chemin dans le volume Docker
+genere_le TIMESTAMP WITH TIME ZONE DEFAULT
+CURRENT_TIMESTAMP,
+genere_par VARCHAR(100) DEFAULT 'ars_epidemio_dag',
+created_at TIMESTAMP WITH TIME ZONE DEFAULT
+CURRENT_TIMESTAMP,
+updated_at TIMESTAMP WITH TIME ZONE DEFAULT
+CURRENT_TIMESTAMP,
+CONSTRAINT uq_rapport_semaine UNIQUE (semaine)
 );
+
 
 INSERT INTO syndromes (code, libelle, description, duree_infectieuse_jours) VALUES
     ('GRIPPE', 'Grippe', 'Syndrome grippal confirmé ou probable', 5),
@@ -105,15 +138,13 @@ ON CONFLICT (code_dept) DO NOTHING;
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
-    NEW.updated_at = CURRENT_TIMESTAMP;
-    RETURN NEW;
+NEW.updated_at = CURRENT_TIMESTAMP;
+RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
-
 CREATE TRIGGER update_donnees_hbd_updated_at
-    BEFORE UPDATE ON donnees_hebdomadaires
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
+BEFORE UPDATE ON donnees_hebdomadaires
+FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_indicateurs_updated_at
-    BEFORE UPDATE ON indicateurs_epidemiques
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+BEFORE UPDATE ON indicateurs_epidemiques
+FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();

@@ -59,6 +59,8 @@ def archiver_local(**context) -> str:
     chemin_source = context["task_instance"].xcom_pull(
         task_ids="collecter_donnees_sursaud"
     )
+    if chemin_source is None:
+        raise ValueError("XCom vide : la tâche collecter_donnees_sursaud n'a pas retourné de chemin")
     
     archive_dir = f"/data/ars/raw/{annee}/{num_sem}"
     os.makedirs(archive_dir, exist_ok=True)
